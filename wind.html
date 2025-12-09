@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realistic Golden Universe - High Density</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000000; color: white; font-family: 'Segoe UI', sans-serif; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        #webcam-feed { position: absolute; bottom: 20px; left: 20px; width: 160px; height: 120px; border-radius: 10px; border: 2px solid #00ffff; z-index: 2; transform: scaleX(-1); object-fit: cover; opacity: 0.6; }
+        #ui-layer { position: absolute; top: 20px; left: 20px; z-index: 3; transition: opacity 0.3s ease-in-out; }
+        #ui-layer.hidden-ui { opacity: 0; pointer-events: none; }
+        .instruction-card { background: rgba(0, 10, 20, 0.85); backdrop-filter: blur(8px); padding: 15px; border-radius: 12px; border: 1px solid rgba(0, 255, 255, 0.2); max-width: 300px; }
+        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+        .status-active { background-color: #00ffff; box-shadow: 0 0 10px #00ffff; }
+        .status-loading { background-color: #ffa500; }
+        .gesture-icon { font-size: 1.2rem; width: 30px; display: inline-block; text-align: center; }
+        #toggle-ui-btn { position: absolute; top: 20px; right: 20px; z-index: 4; background: rgba(0, 20, 30, 0.8); border: 1px solid rgba(0, 255, 255, 0.3); color: #00ffff; padding: 8px 12px; border-radius: 8px; cursor: pointer; backdrop-filter: blur(5px); transition: all 0.2s; }
+        #toggle-ui-btn:hover { background: rgba(0, 40, 60, 0.9); box-shadow: 0 0 10px rgba(0, 255, 255, 0.3); }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <button id="toggle-ui-btn" class="font-bold font-mono">
+        ℹ️ INFO
+    </button>
+
+    <div id="ui-layer">
+        <div class="instruction-card shadow-lg shadow-cyan-500/10">
+            <h1 class="text-xl font-bold text-cyan-400 mb-2 tracking-wider">STAR CORE 💠</h1>
+            <div id="loading-msg" class="text-sm text-gray-400 mb-2">
+                <span class="status-dot status-loading" id="status-dot"></span>
+                <span id="status-text">Initializing AI...</span>
+            </div>
+            
+            <div class="space-y-2 text-sm text-cyan-100 mt-4 border-t border-cyan-900 pt-3">
+                <div class="flex items-center">
+                    <span class="gesture-icon">✊</span>
+                    <span><strong>Fist:</strong> Rotate XY Axis</span>
+                </div>
+                <div class="flex items-center">
+                    <span class="gesture-icon">✌️</span>
+                    <span><strong>2 Fingers:</strong> Zoom (Fold others)</span>
+                </div>
+                <div class="flex items-center">
+                    <span class="gesture-icon">🖐</span>
+                    <span><strong>Open Hand:</strong> Twist (Roll)</span>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <p class="text-xs text-cyan-600 font-mono">DEBUG:</p>
+                <p id="debug-text" class="text-xs text-gray-500 font-mono">Scanning...</p>
+            </div>
+        </div>
+    </div>
+
+    <video id="webcam-feed" autoplay playsinline muted></video>
+
+    <script>
+        // --- UI Logic ---
+        const toggleBtn = document.getElementById('toggle-ui-btn');
+        const uiLayer = document.getElementById('ui-layer');
+        toggleBtn.addEventListener('click', () => uiLayer.classList.toggle('hidden-ui'));
+
+        // --- 1. THREE.JS SETUP ---
+        const container = document.getElementById('canvas-container');
+        const debugText = document.getElementById('debug-text');
+        
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.02); // Pure black fog for high contrast
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 8;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio); // Important for sharpness
+        container.appendChild(renderer.domElement);
+
+        const universeGroup = new THREE.Group();
+        scene.add(universeGroup);
+
+        const centralSystem = new THREE.Group();
+        centralSystem.rotation.z = Math.PI / 8;
+        centralSystem.rotation.x = Math.PI / 8;
+        universeGroup.add(centralSystem);
+
+        // --- TEXTURE GENERATION (SHARPER) ---
+        const getSharpTexture = (colorHex) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; // Higher res
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Core glow
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');   // White hot center
+            gradient.addColorStop(0.15, 'rgba(255,255,255,1)'); // Solid core
+            gradient.addColorStop(0.3, 'rgba(255,255,255,0.4)');
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+            
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            return new THREE.Texture(canvas);
+        };
+        
+        const sharpTexture = getSharpTexture();
+        sharpTexture.needsUpdate = true;
+
+        // --- 1. THE PLANET SURFACE (Particles instead of Solid Mesh) ---
+        // UPDATE: Increased density significantly
+        const surfaceParticleCount = 25000; 
+        const surfGeo = new THREE.BufferGeometry();
+        const surfPos = new Float32Array(surfaceParticleCount * 3);
+        const surfCols = new Float32Array(surfaceParticleCount * 3);
+
+        const surfColor1 = new THREE.Color(0xffcc00); // Gold
+        const surfColor2 = new THREE.Color(0xff5500); // Dark Orange/Red
+
+        for (let i = 0; i < surfaceParticleCount; i++) {
+            // Layered sphere distribution
+            const r = 1.9 + Math.random() * 0.4; 
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
+
+            const x = r * Math.sin(phi) * Math.cos(theta);
+            const y = r * Math.sin(phi) * Math.sin(theta);
+            const z = r * Math.cos(phi);
+
+            surfPos[i * 3] = x;
+            surfPos[i * 3 + 1] = y;
+            surfPos[i * 3 + 2] = z;
+
+            // Color variation
+            const mix = Math.random();
+            const col = surfColor1.clone().lerp(surfColor2, mix);
+            surfCols[i * 3] = col.r; surfCols[i * 3 + 1] = col.g; surfCols[i * 3 + 2] = col.b;
+        }
+
+        surfGeo.setAttribute('position', new THREE.BufferAttribute(surfPos, 3));
+        surfGeo.setAttribute('color', new THREE.BufferAttribute(surfCols, 3));
+        
+        const surfMat = new THREE.PointsMaterial({ 
+            size: 0.08, // Small, sharp points
+            vertexColors: true, 
+            map: sharpTexture, 
+            blending: THREE.AdditiveBlending, 
+            depthWrite: false, // Allows seeing through to the core
+            transparent: true,
+            opacity: 0.8 
+        });
+        const planetSurface = new THREE.Points(surfGeo, surfMat);
+        centralSystem.add(planetSurface);
+
+
+        // --- 2. PULSING BLUE CORE (The "Heart") ---
+        const getBlueGlow = () => {
+             const c = document.createElement('canvas'); c.width=64; c.height=64;
+             const x = c.getContext('2d');
+             const g = x.createRadialGradient(32,32,0,32,32,32);
+             g.addColorStop(0, 'rgba(200, 255, 255, 1)');
+             g.addColorStop(0.4, 'rgba(0, 100, 255, 0.8)');
+             g.addColorStop(1, 'rgba(0, 0, 0, 0)');
+             x.fillStyle = g; x.fillRect(0,0,64,64);
+             const t = new THREE.Texture(c); t.needsUpdate=true; return t;
+        };
+
+        const coreMaterial = new THREE.SpriteMaterial({ 
+            map: getBlueGlow(), 
+            color: 0x00ffff, 
+            blending: THREE.AdditiveBlending,
+            transparent: true,
+            opacity: 1.0
+        });
+        const blueCore = new THREE.Sprite(coreMaterial);
+        blueCore.scale.set(3, 3, 3); // Initial size
+        centralSystem.add(blueCore);
+
+
+        // --- 3. RINGS (Multi-Layered & Random Colors) ---
+        
+        // Helper function to create a ring
+        const createRing = (innerR, outerR, count, colorHex1, colorHex2, size = 0.05) => {
+            const geo = new THREE.BufferGeometry();
+            const pos = new Float32Array(count * 3);
+            const col = new Float32Array(count * 3);
+            const c1 = new THREE.Color(colorHex1);
+            const c2 = new THREE.Color(colorHex2);
+
+            for(let i=0; i<count; i++) {
+                const r = innerR + Math.random() * (outerR - innerR);
+                const theta = Math.random() * Math.PI * 2;
+                
+                pos[i*3] = r * Math.cos(theta);
+                pos[i*3+1] = (Math.random() - 0.5) * 0.1; // Very thin
+                pos[i*3+2] = r * Math.sin(theta);
+                
+                // Gradient
+                const t = (r - innerR) / (outerR - innerR);
+                const c = c1.clone().lerp(c2, t);
+                col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+            }
+            geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+            
+            return new THREE.Points(geo, new THREE.PointsMaterial({
+                size: size, vertexColors: true, map: sharpTexture, 
+                blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.7
+            }));
+        };
+
+        // Ring 1: Main Golden Ring - UPDATE: Increased to 40000
+        const mainRing = createRing(3.2, 6.0, 40000, 0xffaa00, 0xffeecc, 0.06);
+        centralSystem.add(mainRing);
+
+        // Ring 2: Random Random Color 1 - UPDATE: Increased to 15000
+        const randomColor1 = new THREE.Color().setHSL(Math.random(), 1.0, 0.6);
+        const randomColor1End = randomColor1.clone().offsetHSL(0, 0, -0.2); 
+        
+        const ring2 = createRing(6.2, 7.0, 15000, randomColor1.getHex(), randomColor1End.getHex(), 0.05);
+        centralSystem.add(ring2);
+
+        // Ring 3: Random Random Color 2 - UPDATE: Increased to 15000
+        const randomColor2 = new THREE.Color().setHSL(Math.random(), 1.0, 0.6);
+        const randomColor2End = randomColor2.clone().offsetHSL(0, 0, -0.2);
+
+        const ring3 = createRing(7.2, 7.8, 15000, randomColor2.getHex(), randomColor2End.getHex(), 0.05);
+        centralSystem.add(ring3);
+
+
+        // --- 4. REALISTIC STARS (Varied Size & Brightness) ---
+        const starsGeo = new THREE.BufferGeometry();
+        const starCount = 12000; // UPDATE: Increased from 4000
+        const starPos = new Float32Array(starCount * 3);
+        const starColors = new Float32Array(starCount * 3);
+
+        for(let i=0; i<starCount; i++) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
+            const r = 10 + Math.pow(Math.random(), 2) * 100; // Expands far out
+
+            starPos[i*3] = r * Math.sin(phi) * Math.cos(theta);
+            starPos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+            starPos[i*3+2] = r * Math.cos(phi);
+
+            // Realistic Colors 
+            const colorType = Math.random();
+            let c = new THREE.Color();
+            if(colorType > 0.9) c.setHex(0xffdddd); // Reddish dwarf
+            else if(colorType > 0.7) c.setHex(0xddeeff); // Blue giant
+            else c.setHex(0xffffff); // White
+            
+            const distFactor = 1 - Math.min(r / 100, 0.8);
+            c.multiplyScalar(distFactor);
+
+            starColors[i*3] = c.r; starColors[i*3+1] = c.g; starColors[i*3+2] = c.b;
+        }
+
+        starsGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+        starsGeo.setAttribute('color', new THREE.BufferAttribute(starColors, 3));
+        
+        const starMat = new THREE.PointsMaterial({
+            size: 0.15, 
+            vertexColors: true,
+            map: sharpTexture,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending
+        });
+        const starField = new THREE.Points(starsGeo, starMat);
+        universeGroup.add(starField);
+        
+        // Add a second layer of "Tiny Background Stars" - UPDATE: Increased count
+        const tinyStarsGeo = new THREE.BufferGeometry();
+        const tinyCount = 8000; // Increased to 8000
+        const tinyPos = new Float32Array(tinyCount * 3);
+        for(let i=0; i<tinyCount*3; i++) tinyPos[i] = (Math.random()-0.5)*300;
+        tinyStarsGeo.setAttribute('position', new THREE.BufferAttribute(tinyPos, 3));
+        const tinyStars = new THREE.Points(tinyStarsGeo, new THREE.PointsMaterial({
+            color: 0x888888, size: 0.05, transparent: true, opacity: 0.4
+        }));
+        universeGroup.add(tinyStars);
+
+
+        // --- 5. NEBULA (Subtle) ---
+        const nebulaGeo = new THREE.BufferGeometry();
+        const nebCount = 1500; // UPDATE: Increased from 600
+        const nebPos = new Float32Array(nebCount * 3);
+        const nebCol = new Float32Array(nebCount * 3);
+        const nc1 = new THREE.Color(0x4400aa); // Deep Purple
+        const nc2 = new THREE.Color(0x0044aa); // Deep Blue
+
+        for(let i=0; i<nebCount; i++) {
+            const r = 20 + Math.random() * 40;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.random() * Math.PI;
+            nebPos[i*3] = r * Math.sin(phi) * Math.cos(theta);
+            nebPos[i*3+1] = (r * Math.sin(phi) * Math.sin(theta)) * 0.5; // Flattened
+            nebPos[i*3+2] = r * Math.cos(phi);
+            
+            const c = Math.random() > 0.5 ? nc1 : nc2;
+            nebCol[i*3] = c.r; nebCol[i*3+1] = c.g; nebCol[i*3+2] = c.b;
+        }
+        nebulaGeo.setAttribute('position', new THREE.BufferAttribute(nebPos, 3));
+        nebulaGeo.setAttribute('color', new THREE.BufferAttribute(nebCol, 3));
+        const nebula = new THREE.Points(nebulaGeo, new THREE.PointsMaterial({
+            size: 4.0, vertexColors: true, map: sharpTexture, 
+            blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.15
+        }));
+        universeGroup.add(nebula);
+
+
+        // --- GESTURE & LOGIC ---
+        let state = {
+            isHandDetected: false, 
+            isFist: false, 
+            targetQuaternion: new THREE.Quaternion(), 
+            targetZoom: 8, 
+            handX: 0, 
+            handY: 0, 
+            prevHandX: 0, 
+            prevHandY: 0,
+            prevHandAngle: 0
+        };
+
+        const videoElement = document.getElementById('webcam-feed');
+        const statusText = document.getElementById('status-text');
+        const statusDot = document.getElementById('status-dot');
+
+        function onResults(results) {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                state.isHandDetected = false; debugText.innerText = "Scanning Space..."; return;
+            }
+            state.isHandDetected = true;
+            const lm = results.multiHandLandmarks[0];
+            state.handX = 1 - lm[9].x; state.handY = lm[9].y;
+
+            // Helper: Check folded fingers
+            const isFolded = (tip, pip) => Math.hypot(lm[tip].x-lm[0].x, lm[tip].y-lm[0].y) < Math.hypot(lm[pip].x-lm[0].x, lm[pip].y-lm[0].y);
+            
+            const indexF = isFolded(8,6);
+            const middleF = isFolded(12,10);
+            const ringF = isFolded(16,14);
+            const pinkyF = isFolded(20,18);
+
+            const isFist = indexF && middleF && ringF && pinkyF;
+            const isTwoFingers = !indexF && middleF && ringF && pinkyF;
+
+            const dx = lm[9].x - lm[0].x;
+            const dy = lm[9].y - lm[0].y; 
+            const currentAngle = Math.atan2(dy, dx); 
+
+            if (isFist) {
+                debugText.innerText = "✊ ROTATING XY";
+                const dX = state.handX - state.prevHandX;
+                const dY = state.handY - state.prevHandY;
+                const SENSITIVITY = 6;
+                const qY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dX * SENSITIVITY);
+                const qX = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dY * SENSITIVITY);
+                state.targetQuaternion.premultiply(qY);
+                state.targetQuaternion.premultiply(qX);
+            } else if (isTwoFingers) {
+                const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+                debugText.innerText = `✌️ ZOOMING: ${pinchDist.toFixed(2)}`;
+                const minD = 0.02, maxD = 0.20; 
+                const t = (Math.max(minD, Math.min(maxD, pinchDist)) - minD) / (maxD - minD);
+                state.targetZoom = 14 - (t * 10); 
+            } else {
+                debugText.innerText = "🖐 TWIST: Rolling Z-Axis";
+                let dAngle = currentAngle - state.prevHandAngle;
+                if (dAngle > Math.PI) dAngle -= Math.PI * 2;
+                if (dAngle < -Math.PI) dAngle += Math.PI * 2;
+                if (Math.abs(dAngle) > 0.02) {
+                    const qZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), dAngle * 2.5);
+                    state.targetQuaternion.premultiply(qZ);
+                }
+            }
+            state.prevHandX = state.handX; 
+            state.prevHandY = state.handY;
+            state.prevHandAngle = currentAngle;
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        hands.onResults(onResults);
+
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => await hands.send({image: videoElement}),
+            width: 320, height: 240
+        });
+        cameraUtils.start().then(() => {
+            statusText.innerText = "System Online";
+            statusDot.classList.replace('status-loading', 'status-active');
+        });
+
+        // --- ANIMATION ---
+        let time = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+            time += 0.015;
+
+            camera.position.z += (state.targetZoom - camera.position.z) * 0.05;
+
+            if (state.isHandDetected) {
+                universeGroup.quaternion.slerp(state.targetQuaternion, 0.1);
+            } else {
+                const driftQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.0008);
+                state.targetQuaternion.premultiply(driftQ);
+                universeGroup.quaternion.slerp(state.targetQuaternion, 0.1);
+            }
+
+            const pulse = 1 + Math.sin(time * 3) * 0.1;
+            blueCore.scale.set(3.5 * pulse, 3.5 * pulse, 3.5 * pulse);
+            blueCore.material.opacity = 0.8 + Math.sin(time * 3) * 0.2;
+
+            planetSurface.rotation.y -= 0.001;
+            mainRing.rotation.y -= 0.002;
+            ring2.rotation.y -= 0.003;
+            ring3.rotation.y -= 0.0015;
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
