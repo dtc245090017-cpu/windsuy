@@ -1,0 +1,52 @@
+body {
+  font-family: Arial, sans-serif;
+  background: #0b0e1a;
+  color: #e6e6e6;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  justify-content: center;
+}
+
+#app {
+  max-width: 900px;
+  width: 100%;
+  padding: 20px;
+}
+
+h1 {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.video-container {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border: 1px solid #222;
+}
+
+video, canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.status {
+  margin-top: 10px;
+  padding: 10px;
+  background: #112233;
+  border-left: 4px solid #00b894;
+}
+
+.status.error {
+  background: #331111;
+  border-left-color: #d63031;
+}
